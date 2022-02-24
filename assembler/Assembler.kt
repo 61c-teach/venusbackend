@@ -24,9 +24,9 @@ object Assembler {
      * @see venus.linker.Linker
      * @see venus.simulator.Simulator
      */
-    fun assemble(text: String, name: String = "main.S", abspath: String = ""): AssemblerOutput {
+    fun assemble(text: String, name: String = "main.S", abspath: String = "", expandDataSegment: Boolean = false): AssemblerOutput {
         InitInstructions() // This is due to how some method of compilation handle all of the code.
-        var (passOneProg, talInstructions, passOneErrors, warnings) = AssemblerPassOne(text.replace("\r", ""), name, abspath).run()
+        var (passOneProg, talInstructions, passOneErrors, warnings) = AssemblerPassOne(text.replace("\r", ""), name, abspath, expandDataSegment).run()
 
         /* This will force pc to be word aligned. Removed it because I guess you could custom it.
         if (passOneProg.insts.size > 0) {
@@ -83,7 +83,7 @@ data class AssemblerOutput(val prog: Program, val errors: List<AssemblerError>, 
  * It populations [talInstructions], which is then used by [AssemblerPassTwo] in order to actually assemble the code.
  */
 val p1warnings = ArrayList<AssemblerWarning>()
-internal class AssemblerPassOne(private val text: String, name: String = "anonymous", abspath: String) {
+internal class AssemblerPassOne(private val text: String, name: String = "anonymous", abspath: String, private val expandDataSegment: Boolean = false) {
     /** The program we are currently assembling */
     private val prog = Program(name, abspath)
     /** The text offset where the next instruction will be written */
@@ -538,6 +538,7 @@ internal class AssemblerPassOne(private val text: String, name: String = "anonym
      * @param line the original line (which is needed for some directives)
      */
     private fun parseAssemblerDirective(directive: String, args: LineTokens, line: String, dbg: DebugInfo) {
+        val initialDataOffset = currentDataOffset
         when (directive) {
             ".data" -> inTextSegment = false
             ".text" -> {
@@ -752,6 +753,15 @@ internal class AssemblerPassOne(private val text: String, name: String = "anonym
             }
 
             else -> throw AssemblerError("unknown assembler directive $directive", dbg)
+        }
+
+        if (this.expandDataSegment && currentDataOffset > initialDataOffset && directive != ".align") {
+            val numBytes = currentDataOffset - initialDataOffset
+            prog.dataMemoryAllocs.add(Pair(initialDataOffset, numBytes))
+            for (i in 0 until numBytes) {
+                prog.addToData(0)
+            }
+            currentDataOffset += numBytes
         }
     }
 

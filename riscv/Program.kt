@@ -31,6 +31,8 @@ class Program(var name: String = "anonymous", val absPath: String) {
     private val globalLabels = HashSet<String>()
     val imports = ArrayList<Import>()
 
+    val dataMemoryAllocs = ArrayList<Pair<Int, Int>>()
+
     /**
      * Adds an instruction to the program, and increments the text size.
      *

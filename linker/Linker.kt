@@ -85,6 +85,11 @@ object Linker {
             }
             prog.dataSegment.forEach(linkedProgram.prog::addToData)
 
+            for (dataAlloc in prog.dataMemoryAllocs) {
+                val location = dataAlloc.first + dataTotalOffset
+                linkedProgram.prog.dataMemoryAllocs.add(Pair(location, dataAlloc.second))
+            }
+
             for ((relocator, offset, label, labelOffset, dbg) in prog.relocationTable) {
                 val location = textTotalOffset + offset
                 if (location >= MemorySegments.STATIC_BEGIN) {

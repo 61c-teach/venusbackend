@@ -10,6 +10,7 @@ import venusbackend.riscv.*
 import venusbackend.riscv.insts.dsl.types.Instruction
 import venusbackend.riscv.insts.floating.Decimal
 import venusbackend.riscv.insts.integer.base.i.ecall.Alloc
+import venusbackend.riscv.insts.integer.base.i.ecall.MCAlloc
 import venusbackend.simulator.diffs.*
 import venusbackend.simulator.plugins.SimulatorPlugin
 import kotlin.math.max
@@ -42,7 +43,11 @@ open class Simulator(
     val invInstOrderMapping = HashMap<Int, Int>()
     var exitcode: Int? = null
 
-    val alloc: Alloc = Alloc(this)
+    val alloc: Alloc = if (settings.memcheck) {
+        MCAlloc(this)
+    } else {
+        Alloc(this)
+    }
 
     val plugins = LinkedHashMap<String, SimulatorPlugin>()
 
@@ -84,6 +89,14 @@ open class Simulator(
         }
 
 //        breakpoints = Array(linkedProgram.prog.insts.size, { false })
+
+        if (this.settings.memcheckVerbose) {
+            println("[memcheck] data allocs")
+            for (alloc in linkedProgram.prog.dataMemoryAllocs) {
+                println("[memcheck] - ptr=0x${alloc.first.toString(16).toUpperCase()} size=${alloc.second}")
+            }
+            println("[memcheck] end data allocs")
+        }
     }
 
     fun registerPlugin(id: String, plugin: SimulatorPlugin): Boolean {
@@ -432,15 +445,108 @@ open class Simulator(
 
     fun isValidAccess(addr: Number, bytes: Int) {
         if (!this.settings.allowAccessBtnStackHeap) {
-            val upperAddr = addr + bytes
-            val sp = state.getReg(Registers.sp)
-            val heap = state.getHeapEnd()
-            if ((addr > heap && addr < sp) ||
-                (upperAddr > heap && upperAddr < sp)) {
-                throw SimulatorError(
-                        "Attempting to access uninitialized memory between the stack and heap. Attempting to access '$bytes' bytes at address '${Renderer.toHex(addr)}'.",
-                        handled = true)
+            if (this.settings.memcheck) {
+                isValidAccessBetter(addr, bytes)
+            } else {
+                val upperAddr = addr + bytes
+                val sp = state.getReg(Registers.sp)
+                val heap = state.getHeapEnd()
+                if ((addr > heap && addr < sp) ||
+                        (upperAddr > heap && upperAddr < sp)) {
+                    throw SimulatorError(
+                            "Attempting to access uninitialized memory between the stack and heap. Attempting to access '$bytes' bytes at address '${Renderer.toHex(addr)}'.",
+                            handled = true)
+                }
             }
+        }
+    }
+
+    fun isValidAccessBetter(addr: Number, bytes: Int) {
+        val upperAddr = addr + bytes - 1
+        val sp = state.getReg(Registers.sp)
+        val pc = this.getPC()
+
+        val instrIdx = this.invInstOrderMapping[this.getPC()]!!
+        val dbg = this.linkedProgram.dbg[instrIdx]
+
+        if (this.settings.memcheckVerbose) {
+            println("[memcheck] access: pc=${Renderer.toHex(pc)} addr=${Renderer.toHex(addr)} size=$bytes file=${dbg.programName}:${dbg.dbg.lineNo} instr=${dbg.dbg.line.trim()}")
+        }
+
+        var referenceBlock: Pair<Int, Int>? = null
+        var memType = ""
+        var memLocationRel = "after"
+        var diff = -1
+        if ((addr > MemorySegments.HEAP_BEGIN && addr < sp) ||
+            (upperAddr > MemorySegments.HEAP_BEGIN && upperAddr < sp)) {
+            if (this.alloc !is MCAlloc) throw SimulatorError("Error: Simulator.alloc is not instance of MCAlloc. Please contact course staff. ")
+            val results = this.isAddrInBlock(addr.toInt(), bytes, this.alloc.heapMemoryAllocs)
+            if (!results.first) {
+                // not in valid block, check if it was previously free'd
+                val freeResults = this.isAddrInBlock(addr.toInt(), bytes, this.alloc.heapMemoryFrees)
+                if (freeResults.first) {
+                    referenceBlock = freeResults.second
+                    memType = "free'd"
+                    memLocationRel = "inside"
+                    diff = max(0, referenceBlock.first - addr.toInt())
+                } else {
+                    referenceBlock = results.second
+                    memType = "alloc'd"
+                }
+            }
+        } else if ((addr > MemorySegments.STATIC_BEGIN && addr < MemorySegments.HEAP_BEGIN) ||
+                (upperAddr > MemorySegments.STATIC_BEGIN && upperAddr < MemorySegments.HEAP_BEGIN)) {
+            val results = this.isAddrInBlock(addr.toInt(), bytes, linkedProgram.prog.dataMemoryAllocs)
+            if (!results.first) {
+                referenceBlock = results.second
+                memType = "in static"
+            }
+        }
+
+        if (referenceBlock == null) return
+
+        val debugStr = "\tProgram Counter: ${Renderer.toHex(pc)}\n" +
+            "\tFile: ${dbg.programName}:${dbg.dbg.lineNo}\n" +
+            "\tInstruction: ${dbg.dbg.line.trim()}"
+        if (referenceBlock.first == 0) {
+            throw SimulatorError(
+                "[BETA] Invalid memory access of size $bytes. " +
+                        "Address ${Renderer.toHex(addr)} is $memType.\n" +
+                        debugStr,
+                handled = true)
+        }
+        if (diff == -1) diff = max(0, referenceBlock.first + referenceBlock.second - addr.toInt())
+        throw SimulatorError(
+            "[BETA] Invalid memory access of size $bytes. " +
+                    "Address ${Renderer.toHex(addr)} is $diff bytes $memLocationRel a block of size ${referenceBlock.second} $memType.\n" +
+                    debugStr,
+            handled = true)
+    }
+
+    // returns Pair<isValid, closestBlock>,
+    // closestBlock is either the previous block if not valid, or the block addr is in if valid
+    private fun isAddrInBlock(addr: Int, size: Int, validBlocks: ArrayList<Pair<Int, Int>>): Pair<Boolean, Pair<Int, Int>> {
+        val endAddr = addr + size - 1
+
+        var idx = 0
+
+        // Find which block addr is in, if any
+        while (idx < validBlocks.size && validBlocks[idx].first + validBlocks[idx].second < addr) {
+            idx += 1
+        }
+        if (idx >= validBlocks.size) {
+            if (validBlocks.size == 0) return Pair(false, Pair(0, 0))
+            return Pair(false, validBlocks[validBlocks.size - 1])
+        }
+        // idx is the first block that ends on or after addr
+        if (addr < validBlocks[idx].first) {
+            // if addr starts before the block, it is illegal access
+            return Pair(false, validBlocks[idx - 1])
+        } else if (endAddr >= validBlocks[idx].first + validBlocks[idx].second) {
+            // endAddr is after block ends
+            return Pair(false, validBlocks[idx])
+        } else {
+            return Pair(true, validBlocks[idx])
         }
     }
 
@@ -451,15 +557,18 @@ open class Simulator(
         }
         return value
     }
-    fun loadBytewCache(addr: Number): Int {
+    fun loadBytewCache(addr: Number, isSyscall: Boolean = false): Int {
         if (this.settings.alignedAddress && addr % MemSize.BYTE.size != 0) {
             throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not BYTE aligned!")
         }
-        this.isValidAccess(addr, MemSize.BYTE.size)
+        if (!isSyscall) this.isValidAccess(addr, MemSize.BYTE.size)
         preInstruction.add(CacheDiff(Address(addr, MemSize.BYTE)))
         state.cache.read(Address(addr, MemSize.BYTE))
         postInstruction.add(CacheDiff(Address(addr, MemSize.BYTE)))
         return this.loadByte(addr)
+    }
+    fun loadBytewCache(addr: Number): Int {
+        return this.loadBytewCache(addr, false)
     }
 
     fun loadHalfWord(addr: Number, handleWatchpoint: Boolean = true): Int {
@@ -469,15 +578,18 @@ open class Simulator(
         }
         return value
     }
-    fun loadHalfWordwCache(addr: Number): Int {
+    fun loadHalfWordwCache(addr: Number, isSyscall: Boolean = false): Int {
         if (this.settings.alignedAddress && addr % MemSize.HALF.size != 0) {
             throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not HALF WORD aligned!")
         }
-        this.isValidAccess(addr, MemSize.HALF.size)
+        if (!isSyscall) this.isValidAccess(addr, MemSize.HALF.size)
         preInstruction.add(CacheDiff(Address(addr, MemSize.HALF)))
         state.cache.read(Address(addr, MemSize.HALF))
         postInstruction.add(CacheDiff(Address(addr, MemSize.HALF)))
         return this.loadHalfWord(addr)
+    }
+    fun loadHalfWordwCache(addr: Number): Int {
+        return this.loadHalfWordwCache(addr, false)
     }
 
     fun loadWord(addr: Number, handleWatchpoint: Boolean = true): Int {
@@ -487,15 +599,18 @@ open class Simulator(
         }
         return value
     }
-    fun loadWordwCache(addr: Number): Int {
+    fun loadWordwCache(addr: Number, isSyscall: Boolean = false): Int {
         if (this.settings.alignedAddress && addr % MemSize.WORD.size != 0) {
             throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not WORD aligned!")
         }
-        this.isValidAccess(addr, MemSize.WORD.size)
+        if (!isSyscall) this.isValidAccess(addr, MemSize.WORD.size)
         preInstruction.add(CacheDiff(Address(addr, MemSize.WORD)))
         state.cache.read(Address(addr, MemSize.WORD))
         postInstruction.add(CacheDiff(Address(addr, MemSize.WORD)))
         return this.loadWord(addr)
+    }
+    fun loadWordwCache(addr: Number): Int {
+        return this.loadWordwCache(addr, false)
     }
 
     fun loadLong(addr: Number, handleWatchpoint: Boolean = true): Long {
@@ -505,15 +620,18 @@ open class Simulator(
         }
         return value
     }
-    fun loadLongwCache(addr: Number): Long {
+    fun loadLongwCache(addr: Number, isSyscall: Boolean = false): Long {
         if (this.settings.alignedAddress && addr % MemSize.LONG.size != 0) {
             throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not LONG aligned!")
         }
-        this.isValidAccess(addr, MemSize.LONG.size)
+        if (!isSyscall) this.isValidAccess(addr, MemSize.LONG.size)
         preInstruction.add(CacheDiff(Address(addr, MemSize.LONG)))
         state.cache.read(Address(addr, MemSize.LONG))
         postInstruction.add(CacheDiff(Address(addr, MemSize.LONG)))
         return this.loadLong(addr)
+    }
+    fun loadLongwCache(addr: Number): Long {
+        return this.loadLongwCache(addr, false)
     }
 
     fun storeByte(addr: Number, value: Number) {
@@ -523,7 +641,7 @@ open class Simulator(
         postInstruction.add(MemoryDiff(addr, loadWord(addr, handleWatchpoint = false)))
         this.storeTextOverrideCheck(addr, value, MemSize.BYTE)
     }
-    fun storeBytewCache(addr: Number, value: Number) {
+    fun storeBytewCache(addr: Number, value: Number, isSyscall: Boolean = false) {
         if (this.settings.alignedAddress && addr % MemSize.BYTE.size != 0) {
             throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not BYTE aligned!")
         }
@@ -531,11 +649,14 @@ open class Simulator(
         if (!this.settings.mutableText && addr in (MemorySegments.TEXT_BEGIN + 1 - MemSize.BYTE.size)..state.getMaxPC().toInt()) {
             throw StoreError("You are attempting to edit the text of the program though the program is set to immutable at address " + Renderer.toHex(addr) + "!")
         }
-        this.isValidAccess(addr, MemSize.BYTE.size)
+        if (!isSyscall) this.isValidAccess(addr, MemSize.BYTE.size)
         preInstruction.add(CacheDiff(Address(addr, MemSize.BYTE)))
         state.cache.write(Address(addr, MemSize.BYTE))
         this.storeByte(addr, value)
         postInstruction.add(CacheDiff(Address(addr, MemSize.BYTE)))
+    }
+    fun storeBytewCache(addr: Number, value: Number) {
+        this.storeBytewCache(addr, value, false)
     }
 
     fun storeHalfWord(addr: Number, value: Number) {
@@ -545,18 +666,21 @@ open class Simulator(
         postInstruction.add(MemoryDiff(addr, loadWord(addr, handleWatchpoint = false)))
         this.storeTextOverrideCheck(addr, value, MemSize.HALF)
     }
-    fun storeHalfWordwCache(addr: Number, value: Number) {
+    fun storeHalfWordwCache(addr: Number, value: Number, isSyscall: Boolean = false) {
         if (this.settings.alignedAddress && addr % MemSize.HALF.size != 0) {
             throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not HALF WORD aligned!")
         }
         if (!this.settings.mutableText && addr in (MemorySegments.TEXT_BEGIN + 1 - MemSize.HALF.size)..state.getMaxPC().toInt()) {
             throw StoreError("You are attempting to edit the text of the program though the program is set to immutable at address " + Renderer.toHex(addr) + "!")
         }
-        this.isValidAccess(addr, MemSize.HALF.size)
+        if (!isSyscall) this.isValidAccess(addr, MemSize.HALF.size)
         preInstruction.add(CacheDiff(Address(addr, MemSize.HALF)))
         state.cache.write(Address(addr, MemSize.HALF))
         this.storeHalfWord(addr, value)
         postInstruction.add(CacheDiff(Address(addr, MemSize.HALF)))
+    }
+    fun storeHalfWordwCache(addr: Number, value: Number) {
+        this.storeHalfWordwCache(addr, value, false)
     }
 
     fun storeWord(addr: Number, value: Number) {
@@ -566,18 +690,21 @@ open class Simulator(
         postInstruction.add(MemoryDiff(addr, loadWord(addr, handleWatchpoint = false)))
         this.storeTextOverrideCheck(addr, value, MemSize.WORD)
     }
-    fun storeWordwCache(addr: Number, value: Number) {
+    fun storeWordwCache(addr: Number, value: Number, isSyscall: Boolean = false) {
         if (this.settings.alignedAddress && addr % MemSize.WORD.size != 0) {
             throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not WORD aligned!")
         }
         if (!this.settings.mutableText && addr in (MemorySegments.TEXT_BEGIN + 1 - MemSize.WORD.size)..state.getMaxPC().toInt()) {
             throw StoreError("You are attempting to edit the text of the program though the program is set to immutable at address " + Renderer.toHex(addr) + "!")
         }
-        this.isValidAccess(addr, MemSize.WORD.size)
+        if (!isSyscall) this.isValidAccess(addr, MemSize.WORD.size)
         preInstruction.add(CacheDiff(Address(addr, MemSize.WORD)))
         state.cache.write(Address(addr, MemSize.WORD))
         this.storeWord(addr, value)
         postInstruction.add(CacheDiff(Address(addr, MemSize.WORD)))
+    }
+    fun storeWordwCache(addr: Number, value: Number) {
+        this.storeWordwCache(addr, value, false)
     }
 
     fun storeLong(addr: Number, value: Number) {
@@ -587,18 +714,21 @@ open class Simulator(
         postInstruction.add(MemoryDiff(addr, loadLong(addr, handleWatchpoint = false)))
         this.storeTextOverrideCheck(addr, value, MemSize.LONG)
     }
-    fun storeLongwCache(addr: Number, value: Number) {
+    fun storeLongwCache(addr: Number, value: Number, isSyscall: Boolean = false) {
         if (this.settings.alignedAddress && addr % MemSize.LONG.size != 0) {
             throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not long aligned!")
         }
         if (!this.settings.mutableText && addr in (MemorySegments.TEXT_BEGIN + 1 - MemSize.WORD.size)..state.getMaxPC().toInt()) {
             throw StoreError("You are attempting to edit the text of the program though the program is set to immutable at address " + Renderer.toHex(addr) + "!")
         }
-        this.isValidAccess(addr, MemSize.LONG.size)
+        if (!isSyscall) this.isValidAccess(addr, MemSize.LONG.size)
         preInstruction.add(CacheDiff(Address(addr, MemSize.LONG)))
         state.cache.write(Address(addr, MemSize.LONG))
         this.storeLong(addr, value)
         postInstruction.add(CacheDiff(Address(addr, MemSize.LONG)))
+    }
+    fun storeLongwCache(addr: Number, value: Number) {
+        this.storeLongwCache(addr, value, false)
     }
 
     fun storeTextOverrideCheck(addr: Number, value: Number, size: MemSize) {
