@@ -93,7 +93,7 @@ open class Simulator(
         if (this.settings.memcheckVerbose) {
             println("[memcheck] data allocs")
             for (alloc in linkedProgram.prog.dataMemoryAllocs) {
-                println("[memcheck] - ptr=0x${alloc.first.toString(16).toUpperCase()} size=${alloc.second}")
+                println("[memcheck]     ptr=0x${alloc.first.toString(16).toUpperCase()} size=${alloc.second}")
             }
             println("[memcheck] end data allocs")
         }
@@ -470,7 +470,7 @@ open class Simulator(
         val dbg = this.linkedProgram.dbg[instrIdx]
 
         if (this.settings.memcheckVerbose) {
-            println("[memcheck] access: pc=${Renderer.toHex(pc)} addr=${Renderer.toHex(addr)} size=$bytes file=${dbg.programName}:${dbg.dbg.lineNo} instr=${dbg.dbg.line.trim()}")
+            println("[memcheck] access: addr=${Renderer.toHex(addr)} size=$bytes pc=${Renderer.toHex(pc)} file=${dbg.programName}:${dbg.dbg.lineNo} instr=${dbg.dbg.line.trim()}")
         }
 
         var referenceBlock: Pair<Int, Int>? = null
@@ -505,9 +505,17 @@ open class Simulator(
 
         if (referenceBlock == null) return
 
+        var regdump = "                   " // save space for x0
+        for (i in 1..31) {
+            if (i % 4 == 0) regdump = regdump.trimEnd() + "\n\t          "
+            val regnum = "x$i(${getRegNameFromIndex(i, true)})".padStart(8)
+            regdump += "$regnum=${Renderer.toHex(this.getReg(i))} "
+        }
+
         val debugStr = "\tProgram Counter: ${Renderer.toHex(pc)}\n" +
             "\tFile: ${dbg.programName}:${dbg.dbg.lineNo}\n" +
-            "\tInstruction: ${dbg.dbg.line.trim()}"
+            "\tInstruction: ${dbg.dbg.line.trim()}\n" +
+            "\tRegisters: ${regdump.trimEnd()}"
         if (referenceBlock.first == 0) {
             throw SimulatorError(
                 "[BETA] Invalid memory access of size $bytes. " +
