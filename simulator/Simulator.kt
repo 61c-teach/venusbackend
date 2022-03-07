@@ -166,6 +166,7 @@ open class Simulator(
         if (finishPluginsAfterRun) {
             finishPlugins()
         }
+        this.checkNumFreeBlocks()
     }
 
     fun runToBreakpoint(plugins: List<SimulatorPlugin> = emptyList()) {
@@ -470,7 +471,7 @@ open class Simulator(
         val dbg = this.linkedProgram.dbg[instrIdx]
 
         if (this.settings.memcheckVerbose) {
-            println("[memcheck] access: addr=${Renderer.toHex(addr)} size=$bytes pc=${Renderer.toHex(pc)} file=${dbg.programName}:${dbg.dbg.lineNo} instr=${dbg.dbg.line.trim()}")
+            Renderer.printConsole("[memcheck] access: addr=${Renderer.toHex(addr)} size=$bytes pc=${Renderer.toHex(pc)} file=${dbg.programName}:${dbg.dbg.lineNo} instr=${dbg.dbg.line.trim()}\n")
         }
 
         var referenceBlock: Pair<Int, Int>? = null
@@ -517,18 +518,16 @@ open class Simulator(
             "\tInstruction: ${dbg.dbg.line.trim()}\n" +
             "\tRegisters: ${regdump.trimEnd()}"
         if (referenceBlock.first == 0) {
-            throw SimulatorError(
-                "[BETA] Invalid memory access of size $bytes. " +
+            Renderer.displayError(
+                "[memcheck] Invalid memory access of size $bytes. " +
                         "Address ${Renderer.toHex(addr)} is $memType.\n" +
-                        debugStr,
-                handled = true)
+                        debugStr + "\n")
         }
         if (diff == -1) diff = max(0, referenceBlock.first + referenceBlock.second - addr.toInt())
-        throw SimulatorError(
-            "[BETA] Invalid memory access of size $bytes. " +
+        Renderer.displayError(
+            "[memcheck] Invalid memory access of size $bytes. " +
                     "Address ${Renderer.toHex(addr)} is $diff bytes $memLocationRel a block of size ${referenceBlock.second} $memType.\n" +
-                    debugStr,
-            handled = true)
+                    debugStr + "\n")
     }
 
     // returns Pair<isValid, closestBlock>,
@@ -555,6 +554,30 @@ open class Simulator(
             return Pair(false, validBlocks[idx])
         } else {
             return Pair(true, validBlocks[idx])
+        }
+    }
+
+    private fun checkNumFreeBlocks() {
+        if (this.settings.memcheck && this.alloc is MCAlloc) {
+            val numBlocks = this.alloc.heapMemoryAllocs.size
+            val numBytes = if (numBlocks == 0) {
+                0
+            } else {
+                this.alloc.heapMemoryAllocs.map { it.second }.reduce { acc, int -> acc + int }
+            }
+            var errorMsg = "[memcheck] In use at exit: $numBytes bytes in $numBlocks blocks"
+            if (this.settings.memcheckVerbose) {
+                for (block in this.alloc.heapMemoryAllocs) {
+                    errorMsg += "\n\t${block.second} bytes at ${Renderer.toHex(block.first)} is lost"
+                }
+            } else {
+                errorMsg += "\n[memcheck] For detailed leak analysis, rerun with --memcheckVerbose"
+            }
+            if (this.settings.memcheckVerbose || numBlocks > 0) {
+                Renderer.displayError(errorMsg + "\n")
+            } else if (this.settings.memcheckVerbose) {
+                Renderer.printConsole(errorMsg + "\n")
+            }
         }
     }
 
