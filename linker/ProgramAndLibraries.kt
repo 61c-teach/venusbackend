@@ -10,7 +10,7 @@ import venusbackend.assembler.Assembler
 import venusbackend.riscv.Import
 import venusbackend.riscv.Program
 
-class ProgramAndLibraries(val progs: List<Program>, vfs: VirtualFileSystem) {
+class ProgramAndLibraries(val progs: List<Program>, vfs: VirtualFileSystem, expandDataSegment: Boolean = false) {
     val AllProgs = ArrayList<Program>()
     init {
         val seenPrograms = HashMap<Import, ImportProgramData>()
@@ -49,7 +49,7 @@ class ProgramAndLibraries(val progs: List<Program>, vfs: VirtualFileSystem) {
                 VFSType.File -> {
                     // Get the text
                     val progText = (obj as VFSFile).readText()
-                    val (prog, errors, warnings) = Assembler.assemble(progText, progname, obj.getPath())
+                    val (prog, errors, warnings) = Assembler.assemble(progText, progname, obj.getPath(), expandDataSegment)
                     if (errors.isNotEmpty()) {
                         var msgs = "Could not load the library: $progname (Note: The library file was found but it could not be assembled) This library was imported by ${progData.importingProgram}. Here are a list of errors which may help:\n\n"
                         for (error in errors) {

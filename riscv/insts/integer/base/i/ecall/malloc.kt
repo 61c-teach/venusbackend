@@ -347,7 +347,7 @@ open class Alloc(val sim: Simulator) {
      * Counts the number of blocks which are not free.
      * Returns -1 if an error has occurred (aka a corrupted list)
      */
-    fun numActiveBlocks(): Int {
+    open fun numActiveBlocks(): Int {
         if (!initialized) {
             return 0
         }
@@ -400,6 +400,7 @@ class MCAlloc(sim: Simulator) : Alloc(sim) {
         val actualPtr = rawPtr + size
         heapPointerMap[actualPtr] = rawPtr
         heapMemoryAllocs.add(Pair(actualPtr, size))
+        heapMemoryFrees.remove(Pair(actualPtr, size))
 
         if (verbose) {
             Renderer.printConsole("[memcheck] $prefix: ptr=${Renderer.toHex(actualPtr)} rawptr=${Renderer.toHex(rawPtr)} size=$size\n")
@@ -427,7 +428,8 @@ class MCAlloc(sim: Simulator) : Alloc(sim) {
         heapPointerMap.remove(ptr)
         heapMemoryAllocs.remove(Pair(ptr, mn.size / 3))
         heapMemoryFrees.add(Pair(ptr, mn.size / 3))
-        mn.freeNode(sim)
+        // Don't actually free it
+        // mn.freeNode(sim)
 
         if (verbose) {
             Renderer.printConsole("[memcheck] free: ptr=${Renderer.toHex(ptr)} rawptr=${Renderer.toHex(rawPtr)} size=${mn.size}\n")
@@ -469,7 +471,13 @@ class MCAlloc(sim: Simulator) : Alloc(sim) {
         return newBlock
     }
 
+    override fun numActiveBlocks(): Int {
+        return this.heapMemoryAllocs.size
+    }
+
     private fun printStatus() {
+        this.heapMemoryAllocs.sortBy { it.first }
+        this.heapMemoryFrees.sortBy { it.first }
         Renderer.printConsole("[memcheck] heap allocs\n")
         for (alloc in this.heapMemoryAllocs) {
             Renderer.printConsole("[memcheck]     ptr=${Renderer.toHex(alloc.first)} size=${alloc.second}\n")
@@ -484,6 +492,7 @@ class MCAlloc(sim: Simulator) : Alloc(sim) {
 
     private fun getDebugStr(): String {
         val instrIdx = this.sim.invInstOrderMapping[this.sim.getPC()]!!
+        if (instrIdx == 0) return "not an instruction"
         val dbg = this.sim.linkedProgram.dbg[instrIdx]
         return "${dbg.programName}:${dbg.dbg.lineNo} ${dbg.dbg.line.trim()}"
     }

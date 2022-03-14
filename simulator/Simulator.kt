@@ -91,6 +91,7 @@ open class Simulator(
 //        breakpoints = Array(linkedProgram.prog.insts.size, { false })
 
         if (this.settings.memcheckVerbose) {
+            linkedProgram.prog.dataMemoryAllocs.sortBy { it.first }
             println("[memcheck] data allocs")
             for (alloc in linkedProgram.prog.dataMemoryAllocs) {
                 println("[memcheck]     ptr=0x${alloc.first.toString(16).toUpperCase()} size=${alloc.second}")
@@ -506,24 +507,18 @@ open class Simulator(
 
         if (referenceBlock == null) return
 
-        var regdump = "                   " // save space for x0
-        for (i in 1..31) {
-            if (i % 4 == 0) regdump = regdump.trimEnd() + "\n\t          "
-            val regnum = "x$i(${getRegNameFromIndex(i, true)})".padStart(8)
-            regdump += "$regnum=${Renderer.toHex(this.getReg(i))} "
-        }
-
+        val regdump = this.getRegDump("\t")
         val debugStr = "\tProgram Counter: ${Renderer.toHex(pc)}\n" +
             "\tFile: ${dbg.programName}:${dbg.dbg.lineNo}\n" +
             "\tInstruction: ${dbg.dbg.line.trim()}\n" +
-            "\tRegisters: ${regdump.trimEnd()}"
+            regdump.trimEnd()
         if (referenceBlock.first == 0) {
             Renderer.displayError(
                 "[memcheck] Invalid memory access of size $bytes. " +
                         "Address ${Renderer.toHex(addr)} is $memType.\n" +
                         debugStr + "\n")
         }
-        if (diff == -1) diff = max(0, referenceBlock.first + referenceBlock.second - addr.toInt())
+        if (diff == -1) diff = max(0, addr.toInt() - (referenceBlock.first + referenceBlock.second))
         Renderer.displayError(
             "[memcheck] Invalid memory access of size $bytes. " +
                     "Address ${Renderer.toHex(addr)} is $diff bytes $memLocationRel a block of size ${referenceBlock.second} $memType.\n" +
@@ -548,6 +543,7 @@ open class Simulator(
         // idx is the first block that ends on or after addr
         if (addr < validBlocks[idx].first) {
             // if addr starts before the block, it is illegal access
+            if (idx == 0) return Pair(false, Pair(0, 0))
             return Pair(false, validBlocks[idx - 1])
         } else if (endAddr >= validBlocks[idx].first + validBlocks[idx].second) {
             // endAddr is after block ends
@@ -579,6 +575,16 @@ open class Simulator(
                 Renderer.printConsole(errorMsg + "\n")
             }
         }
+    }
+
+    private fun getRegDump(prefix: String = ""): String {
+        var regdump = "${prefix}Registers:                    " // save space for x0
+        for (i in 1..31) {
+            if (i % 4 == 0) regdump = regdump.trimEnd() + "\n$prefix          "
+            val regnum = "x$i(${getRegNameFromIndex(i, true)})".padStart(8)
+            regdump += "$regnum=${Renderer.toHex(this.getReg(i))} "
+        }
+        return regdump
     }
 
     fun loadByte(addr: Number, handleWatchpoint: Boolean = true): Int {
