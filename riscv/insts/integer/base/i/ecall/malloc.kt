@@ -491,9 +491,6 @@ class MCAlloc(sim: Simulator) : Alloc(sim) {
     }
 
     private fun getDebugStr(): String {
-        val instrIdx = this.sim.invInstOrderMapping[this.sim.getPC()]!!
-        if (instrIdx == 0) return "not an instruction"
-        val dbg = this.sim.linkedProgram.dbg[instrIdx]
-        return "${dbg.programName}:${dbg.dbg.lineNo} ${dbg.dbg.line.trim()}"
+        return this.sim.getInstDebugStr(this.sim.getPC())
     }
 }

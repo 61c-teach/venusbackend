@@ -51,6 +51,9 @@ open class Simulator(
 
     val plugins = LinkedHashMap<String, SimulatorPlugin>()
 
+    // HashMap<cycle, Pair<instrStr, regDump>>
+    private val jumpHistory = HashMap<Number, Pair<String, String>>()
+
     init {
         (state).getReg(1)
         var i = 0
@@ -225,6 +228,7 @@ open class Simulator(
             exitcode = state.getReg(Registers.a0).toInt()
         }
         this.plugins.values.forEach { it.onStep(this, mcode, prevPC) }
+        if (this.jumped || this.branched) this.jumpHistory[cycles] = Pair(this.getInstDebugStr(prevPC), this.getRegDumpStr("\t"))
         return postInstruction.toList()
     }
 
@@ -507,10 +511,11 @@ open class Simulator(
 
         if (referenceBlock == null) return
 
-        val regdump = this.getRegDump("\t")
+        val regdump = this.getRegDumpStr("\t")
         val debugStr = "\tProgram Counter: ${Renderer.toHex(pc)}\n" +
             "\tFile: ${dbg.programName}:${dbg.dbg.lineNo}\n" +
             "\tInstruction: ${dbg.dbg.line.trim()}\n" +
+            "\tRegisters:\n" +
             regdump.trimEnd()
         if (referenceBlock.first == 0) {
             Renderer.displayError(
@@ -575,16 +580,6 @@ open class Simulator(
                 Renderer.printConsole(errorMsg + "\n")
             }
         }
-    }
-
-    private fun getRegDump(prefix: String = ""): String {
-        var regdump = "${prefix}Registers:                    " // save space for x0
-        for (i in 1..31) {
-            if (i % 4 == 0) regdump = regdump.trimEnd() + "\n$prefix          "
-            val regnum = "x$i(${getRegNameFromIndex(i, true)})".padStart(8)
-            regdump += "$regnum=${Renderer.toHex(this.getReg(i))} "
-        }
-        return regdump
     }
 
     fun loadByte(addr: Number, handleWatchpoint: Boolean = true): Int {
@@ -865,6 +860,53 @@ open class Simulator(
         d["registers"] = registers
         d["memory"] = this.state.mem.dump()
         return d
+    }
+
+    fun getJumpDumpStr(prefix: String = ""): String {
+        val cycles = this.jumpHistory.keys.sortedBy { it.toInt() }
+        return cycles.reversed().joinToString(separator = "") { "${it}: $prefix${this.jumpHistory[it]?.first}\n${this.jumpHistory[it]?.second}\n" }
+    }
+
+    fun getInstDumpStr(prefix: String = ""): String {
+        val PCs = this.invInstOrderMapping.keys.sortedBy { it }
+        return PCs.joinToString(separator = "") { "0x${it.toString(16).toUpperCase().padStart(8, '0')} ${this.getInstDebugStr(it)}\n" }
+    }
+
+    fun getMemDumpStr(prefix: String = ""): String {
+        val mem = this.state.mem.dump()
+        val groups = HashSet<Long>()
+        for (addr in mem.keys) {
+            groups.add(addr shr 4 shl 4)
+        }
+
+        val dump = ArrayList<String>();
+        for (group in groups.sorted()) {
+            var str = "${group.toString(16).padStart(8, '0')}:"
+            for (i in 0..15) {
+                if (i % 2 == 0) str += " "
+                str += mem[group + i]?.toString(16)?.padStart(2, '0') ?: "00"
+            }
+            dump.add(str)
+        }
+
+        return dump.joinToString(separator = "") { "$prefix$it\n" }
+    }
+
+    fun getRegDumpStr(prefix: String = ""): String {
+        var regdump = "${prefix}                    " // save space for x0
+        for (i in 1..31) {
+            if (i % 4 == 0) regdump = regdump.trimEnd() + "\n$prefix"
+            val regnum = "x$i(${getRegNameFromIndex(i, true)})".padStart(8)
+            regdump += "$regnum=${Renderer.toHex(this.getReg(i))} "
+        }
+        return regdump
+    }
+
+    fun getInstDebugStr(pc: Number): String {
+        val instrIdx = this.invInstOrderMapping[pc]
+        if (instrIdx == null || instrIdx == 0) return "not an instruction"
+        val dbg = this.linkedProgram.dbg[instrIdx]
+        return "${dbg.programName}:${dbg.dbg.lineNo} ${dbg.dbg.line.trim()}"
     }
 }
 
