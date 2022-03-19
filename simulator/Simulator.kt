@@ -53,6 +53,7 @@ open class Simulator(
 
     // HashMap<cycle, Pair<instrStr, regDump>>
     private val jumpHistory = HashMap<Number, Pair<String, String>>()
+    private val ebreakHistory = HashMap<Number, Pair<String, String>>()
 
     init {
         (state).getReg(1)
@@ -228,7 +229,8 @@ open class Simulator(
             exitcode = state.getReg(Registers.a0).toInt()
         }
         this.plugins.values.forEach { it.onStep(this, mcode, prevPC) }
-        if (this.jumped || this.branched) this.jumpHistory[cycles] = Pair(this.getInstDebugStr(prevPC), this.getRegDumpStr("\t"))
+        if (this.jumped || this.branched) this.jumpHistory[cycles] = Pair("${Renderer.toHex(prevPC)} ${this.getInstDebugStr(prevPC)}", this.getRegDumpStr("\t"))
+        if (this.ebreak) this.ebreakHistory[cycles] = Pair("${Renderer.toHex(prevPC)} ${this.getInstDebugStr(prevPC)}", this.getRegDumpStr("\t"))
         return postInstruction.toList()
     }
 
@@ -862,9 +864,17 @@ open class Simulator(
         return d
     }
 
+    private fun generateHistoryDump(history: HashMap<Number, Pair<String, String>>, prefix: String = ""): String {
+        val cycles = history.keys.sortedBy { it.toInt() }
+        return cycles.reversed().joinToString(separator = "") { "${it}: $prefix${history[it]?.first}\n${history[it]?.second}\n" }
+    }
+
+    fun getEbreakDumpStr(prefix: String = ""): String {
+        return this.generateHistoryDump(this.ebreakHistory, prefix)
+    }
+    
     fun getJumpDumpStr(prefix: String = ""): String {
-        val cycles = this.jumpHistory.keys.sortedBy { it.toInt() }
-        return cycles.reversed().joinToString(separator = "") { "${it}: $prefix${this.jumpHistory[it]?.first}\n${this.jumpHistory[it]?.second}\n" }
+        return this.generateHistoryDump(this.jumpHistory, prefix)
     }
 
     fun getInstDumpStr(prefix: String = ""): String {
@@ -907,6 +917,19 @@ open class Simulator(
         if (instrIdx == null || instrIdx == 0) return "not an instruction"
         val dbg = this.linkedProgram.dbg[instrIdx]
         return "${dbg.programName}:${dbg.dbg.lineNo} ${dbg.dbg.line.trim()}"
+    }
+
+    fun getCoreDumpText(): String {
+        val instrStr = this.getInstDebugStr(this.getPC())
+
+        val stateDump = "Current PC: ${Renderer.toHex(this.getPC())}\nCurrent Instruction: $instrStr\n"
+        val regDump = "Registers:\n${this.getRegDumpStr("")}\n"
+        val jumpDump = "Jump/Branch History (reverse):\n${this.getJumpDumpStr()}\n"
+        val ebreakDump = "ebreak History (reverse):\n${this.getEbreakDumpStr()}\n"
+        val instDump = "Instructions:\n${this.getInstDumpStr("")}"
+        val memDump = "Memory:\n${this.getMemDumpStr("")}\n"
+
+        return "$stateDump\n$regDump\n$ebreakDump\n$jumpDump\n$instDump\n$memDump\n"
     }
 }
 
