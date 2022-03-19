@@ -485,7 +485,12 @@ open class Simulator(
         var memType = ""
         var memLocationRel = "after"
         var diff = -1
-        if ((addr >= MemorySegments.HEAP_BEGIN && addr < sp) ||
+        if (!this.settings.mutableText && (
+            (addr in MemorySegments.TEXT_BEGIN..state.getMaxPC().toInt()) ||
+            (upperAddr in MemorySegments.TEXT_BEGIN..state.getMaxPC().toInt()))) {
+            referenceBlock = Pair(0, 0)
+            memType = "in text"
+        } else if ((addr >= MemorySegments.HEAP_BEGIN && addr < sp) ||
             (upperAddr >= MemorySegments.HEAP_BEGIN && upperAddr < sp)) {
             if (this.alloc !is MCAlloc) throw SimulatorError("Error: Simulator.alloc is not instance of MCAlloc. Please contact course staff. ")
             val results = this.isAddrInBlock(addr.toInt(), bytes, this.alloc.heapMemoryAllocs)
@@ -524,6 +529,7 @@ open class Simulator(
                 "[memcheck] Invalid memory access of size $bytes. " +
                         "Address ${Renderer.toHex(addr)} is $memType.\n" +
                         debugStr + "\n")
+            return
         }
         if (diff == -1) diff = max(0, addr.toInt() - (referenceBlock.first + referenceBlock.second))
         Renderer.displayError(
