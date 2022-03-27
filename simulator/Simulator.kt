@@ -872,7 +872,7 @@ open class Simulator(
 
     private fun generateHistoryDump(history: HashMap<Number, Pair<String, String>>, prefix: String = ""): String {
         val cycles = history.keys.sortedBy { it.toInt() }
-        return cycles.reversed().joinToString(separator = "") { "${it}: $prefix${history[it]?.first}\n${history[it]?.second}\n" }
+        return cycles.reversed().joinToString(separator = "") { "$prefix${it}: ${history[it]?.first}\n$prefix${history[it]?.second}\n" }
     }
 
     fun getEbreakDumpStr(prefix: String = ""): String {
@@ -915,7 +915,7 @@ open class Simulator(
             val regnum = "x$i(${getRegNameFromIndex(i, true)})".padStart(8)
             regdump += "$regnum=${Renderer.toHex(this.getReg(i))} "
         }
-        return regdump
+        return regdump.trimEnd()
     }
 
     fun getInstDebugStr(pc: Number): String {

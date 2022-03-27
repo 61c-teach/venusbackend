@@ -393,7 +393,7 @@ class MCAlloc(sim: Simulator) : Alloc(sim) {
         val newSize = size * 3
         val rawPtr = super.malloc(newSize, calloc)
         if (rawPtr == 0) {
-            Renderer.printConsole("[memcheck] $prefix: could not allocate $size$ bytes of space\n")
+            Renderer.printConsole("[memcheck] $prefix: could not allocate $size bytes of space\n")
             return 0
         }
 
